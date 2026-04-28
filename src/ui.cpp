@@ -1,8 +1,8 @@
 #include "process_monitor/ui.hpp"
 
-#include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -99,7 +99,8 @@ void ConsoleUI::refresh_and_print() {
 
     // Always perform a full clear and move to home to ensure no previous
     // content remains on the screen before printing the refreshed list.
-    std::cout << "\033[2J\033[H";
+    // std::cout << "\033[2J\033[H";
+    std::system("clear");
     first_update_ = false;
 
     std::cout << "Process Monitor\n";
@@ -109,7 +110,15 @@ void ConsoleUI::refresh_and_print() {
         std::cout << " | watch: " << watch_interval_seconds_ << "s";
     }
 
-    std::cout << "\n\n";
+    std::cout << "\n";
+
+    // If there's a status message from the last command, show it here
+    if (!status_message_.empty()) {
+        std::cout << status_message_ << "\n\n";
+    } else {
+        std::cout << "\n";
+    }
+
     last_printed_lines_ = print_processes();
     std::cout.flush();
 }
@@ -188,14 +197,14 @@ bool ConsoleUI::handle_command(const std::string& line) {
         }
 
         watch_interval_seconds_ = seconds;
-        std::cout << "Auto refresh enabled: every " << watch_interval_seconds_ << " second(s).\n";
+        status_message_ = "Auto refresh enabled: every " + std::to_string(watch_interval_seconds_) + " second(s).";
         refresh_and_print();
         return true;
     }
 
     if (command == "stop") {
         watch_interval_seconds_ = 0;
-        std::cout << "Auto refresh disabled.\n";
+        status_message_ = "Auto refresh disabled.";
         refresh_and_print();
         return true;
     }
@@ -219,9 +228,9 @@ bool ConsoleUI::handle_command(const std::string& line) {
         }
 
         if (!ok) {
-            std::cout << "Operation failed: " << error << "\n";
+            status_message_ = std::string("Operation failed: ") + error;
         } else {
-            std::cout << "Operation completed.\n";
+            status_message_ = "Operation completed.";
         }
 
         refresh_and_print();
@@ -239,9 +248,9 @@ bool ConsoleUI::handle_command(const std::string& line) {
 
         std::string error;
         if (!manager_.set_priority(pid, value, error)) {
-            std::cout << "Operation failed: " << error << "\n";
+            status_message_ = std::string("Operation failed: ") + error;
         } else {
-            std::cout << "Priority changed.\n";
+            status_message_ = "Priority changed.";
         }
 
         refresh_and_print();
@@ -253,7 +262,7 @@ bool ConsoleUI::handle_command(const std::string& line) {
         return false;
     }
 
-    std::cout << "Unknown command. Type 'help'.\n";
+    status_message_ = "Unknown command. Type 'help'.";
     return true;
 }
 

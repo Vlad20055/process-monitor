@@ -2,7 +2,6 @@
 
 #include "process_monitor/process.hpp"
 
-#include <limits>
 #include <vector>
 
 namespace process_monitor {

@@ -32,6 +32,7 @@ private:
     
     bool first_update_ = true;
     int last_printed_lines_ = 0;
+    std::string status_message_;
 };
 
 }  // namespace process_monitor
