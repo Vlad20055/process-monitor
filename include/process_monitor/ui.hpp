@@ -33,6 +33,9 @@ private:
     bool first_update_ = true;
     int last_printed_lines_ = 0;
     std::string status_message_;
+    std::vector<std::string> recent_messages_;
+    static constexpr std::size_t kMaxRecentMessages = 6;
+    void push_status_message(const std::string& msg);
 };
 
 }  // namespace process_monitor

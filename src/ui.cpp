@@ -49,6 +49,14 @@ ConsoleUI::ConsoleUI(AppConfig config)
     : config_(config),
       watch_interval_seconds_(config.initial_watch_interval_seconds) {}
 
+void ConsoleUI::push_status_message(const std::string& msg) {
+    status_message_ = msg;
+    recent_messages_.push_back(msg);
+    if (recent_messages_.size() > kMaxRecentMessages) {
+        recent_messages_.erase(recent_messages_.begin());
+    }
+}
+
 std::string ConsoleUI::trim(const std::string& text) {
     std::size_t begin = 0;
     while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin]))) {
@@ -97,6 +105,48 @@ void ConsoleUI::print_help() const {
 void ConsoleUI::refresh_and_print() {
     processes_ = reader_.list_processes();
 
+    // Apply CLI filters from config_
+    if (!config_.name_filter.empty() || config_.min_cpu_seconds > 0.0 || !config_.user_filter.empty()) {
+        std::vector<ProcessInfo> filtered;
+        filtered.reserve(processes_.size());
+
+        const std::string name_filter_lower = [&]() {
+            std::string s = config_.name_filter;
+            for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        }();
+
+        for (const auto& p : processes_) {
+            bool keep = true;
+
+            if (!config_.name_filter.empty()) {
+                std::string hay = p.name + " " + p.command_line;
+                for (char& c : hay) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (hay.find(name_filter_lower) == std::string::npos) {
+                    keep = false;
+                }
+            }
+
+            if (keep && config_.min_cpu_seconds > 0.0) {
+                if (p.cpu_time_seconds < config_.min_cpu_seconds) {
+                    keep = false;
+                }
+            }
+
+            if (keep && !config_.user_filter.empty()) {
+                if (p.user != config_.user_filter) {
+                    keep = false;
+                }
+            }
+
+            if (keep) {
+                filtered.push_back(p);
+            }
+        }
+
+        processes_.swap(filtered);
+    }
+
     // Always perform a full clear and move to home to ensure no previous
     // content remains on the screen before printing the refreshed list.
     // std::cout << "\033[2J\033[H";
@@ -105,6 +155,18 @@ void ConsoleUI::refresh_and_print() {
 
     std::cout << "Process Monitor\n";
     std::cout << "Processes: " << processes_.size();
+    if (!config_.name_filter.empty() || config_.min_cpu_seconds > 0.0 || !config_.user_filter.empty()) {
+        std::cout << " | filters:";
+        if (!config_.name_filter.empty()) {
+            std::cout << " name='" << config_.name_filter << "'";
+        }
+        if (config_.min_cpu_seconds > 0.0) {
+            std::cout << " min_cpu>=" << config_.min_cpu_seconds << "s";
+        }
+        if (!config_.user_filter.empty()) {
+            std::cout << " user='" << config_.user_filter << "'";
+        }
+    }
 
     if (watch_interval_seconds_ > 0) {
         std::cout << " | watch: " << watch_interval_seconds_ << "s";
@@ -112,8 +174,13 @@ void ConsoleUI::refresh_and_print() {
 
     std::cout << "\n";
 
-    // If there's a status message from the last command, show it here
-    if (!status_message_.empty()) {
+    // Show recent operation messages
+    if (!recent_messages_.empty()) {
+        for (const auto& m : recent_messages_) {
+            std::cout << m << "\n";
+        }
+        std::cout << "\n";
+    } else if (!status_message_.empty()) {
         std::cout << status_message_ << "\n\n";
     } else {
         std::cout << "\n";
@@ -192,19 +259,19 @@ bool ConsoleUI::handle_command(const std::string& line) {
     if (command == "watch") {
         int seconds = 0;
         if (!(iss >> seconds) || seconds <= 0) {
-            std::cout << "Invalid interval.\n";
+            push_status_message("Invalid interval.");
             return true;
         }
 
         watch_interval_seconds_ = seconds;
-        status_message_ = "Auto refresh enabled: every " + std::to_string(watch_interval_seconds_) + " second(s).";
+        push_status_message(std::string("Auto refresh enabled: every ") + std::to_string(watch_interval_seconds_) + " second(s).");
         refresh_and_print();
         return true;
     }
 
     if (command == "stop") {
         watch_interval_seconds_ = 0;
-        status_message_ = "Auto refresh disabled.";
+        push_status_message("Auto refresh disabled.");
         refresh_and_print();
         return true;
     }
@@ -212,7 +279,7 @@ bool ConsoleUI::handle_command(const std::string& line) {
     if (command == "kill" || command == "suspend" || command == "resume") {
         int pid = 0;
         if (!(iss >> pid) || pid <= 0) {
-            std::cout << "Invalid PID.\n";
+            push_status_message("Invalid PID.");
             return true;
         }
 
@@ -227,10 +294,27 @@ bool ConsoleUI::handle_command(const std::string& line) {
             ok = manager_.resume_process(pid, error);
         }
 
+
         if (!ok) {
-            status_message_ = std::string("Operation failed: ") + error;
+            if (command == "kill") {
+                push_status_message(std::string("Terminate ") + std::to_string(pid) + " failed: " + error);
+            } else if (command == "suspend") {
+                push_status_message(std::string("Suspend ") + std::to_string(pid) + " failed: " + error);
+            } else if (command == "resume") {
+                push_status_message(std::string("Resume ") + std::to_string(pid) + " failed: " + error);
+            } else {
+                push_status_message(std::string("Operation failed: ") + error);
+            }
         } else {
-            status_message_ = "Operation completed.";
+            if (command == "kill") {
+                push_status_message(std::string("Process ") + std::to_string(pid) + " terminated.");
+            } else if (command == "suspend") {
+                push_status_message(std::string("Process ") + std::to_string(pid) + " suspended.");
+            } else if (command == "resume") {
+                push_status_message(std::string("Process ") + std::to_string(pid) + " resumed.");
+            } else {
+                push_status_message("Operation completed.");
+            }
         }
 
         refresh_and_print();
@@ -242,15 +326,15 @@ bool ConsoleUI::handle_command(const std::string& line) {
         int value = 0;
 
         if (!(iss >> pid >> value) || pid <= 0 || value < -20 || value > 19) {
-            std::cout << "Usage: nice <pid> <value>, where value is in range [-20; 19].\n";
+            push_status_message("Usage: nice <pid> <value>, where value is in range [-20; 19].");
             return true;
         }
 
         std::string error;
         if (!manager_.set_priority(pid, value, error)) {
-            status_message_ = std::string("Operation failed: ") + error;
+            push_status_message(std::string("Operation failed: ") + error);
         } else {
-            status_message_ = "Priority changed.";
+            push_status_message("Priority changed.");
         }
 
         refresh_and_print();
